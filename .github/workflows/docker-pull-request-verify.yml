@@ -1,41 +1,34 @@
-name: Docker Pull Request CI
-
-on:
-  pull_request:
-
 jobs:
   read-versions:
-    runs-on: ubuntu-latest
     outputs:
       apiman-version: ${{ steps.read-apiman-version.outputs.release-version }}
-      is-snapshot-version: ${{ steps.read-apiman-version.outputs.is-snapshot-version }}
+      is-snapshot-version: ${{ steps.read-apiman-version.outputs.is-snapshot-version
+        }}
+    runs-on: self-hosted
     steps:
-      - name: Checkout Apiman Monorepo
-        uses: actions/checkout@v3
-
-      - name: Default setup items
-        run: bash .github/workflows/support/setup.sh
-
-      - name: Get Apiman version
-        id: read-apiman-version
-        # Don't use mvn for `help:evaluate` command, output is messed up.
-        run: |
-          export APIMAN_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "apiman-version=$APIMAN_VERSION" >> $GITHUB_OUTPUT
-          if [[ "$APIMAN_VERSION" =~ "SNAPSHOT" ]]
-          then
-            echo "is-snapshot-version=true" >> $GITHUB_OUTPUT
-          else
-            echo "is-snapshot-version=false" >> $GITHUB_OUTPUT
-          fi
-
+    - continue-on-error: true
+      name: Checkout Apiman Monorepo
+      uses: actions/checkout@v3
+    - continue-on-error: true
+      name: Default setup items
+      run: bash .github/workflows/support/setup.sh
+    - continue-on-error: true
+      id: read-apiman-version
+      name: Get Apiman version
+      run: "export APIMAN_VERSION=$(mvn help:evaluate -Dexpression=project.version\
+        \ -q -DforceStdout)\necho \"apiman-version=$APIMAN_VERSION\" >> $GITHUB_OUTPUT\n\
+        if [[ \"$APIMAN_VERSION\" =~ \"SNAPSHOT\" ]]\nthen\n  echo \"is-snapshot-version=true\"\
+        \ >> $GITHUB_OUTPUT\nelse\n  echo \"is-snapshot-version=false\" >> $GITHUB_OUTPUT\n\
+        fi\n"
   test-build:
     needs: read-versions
-    uses: apiman/apiman/.github/workflows/docker-test-release.yml@master
     secrets: inherit
+    uses: apiman/apiman/.github/workflows/docker-test-release.yml@master
     with:
       apiman-version: ${{ needs.read-versions.outputs.apiman-version }}
       push-to-repos: false
       snapshot: ${{ needs.build-verify.outputs.is-snapshot-version == 'true' }}
-
-
+name: Docker Pull Request CI
+on:
+  repository_dispatch:
+    types: trigger-ga___docker-pull-request-verify.yml

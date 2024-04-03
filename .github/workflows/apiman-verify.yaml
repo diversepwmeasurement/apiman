@@ -1,246 +1,248 @@
-name: Verify Build Workflow
-on:
-  push:
-    paths-ignore:
-      - '.gitignore'
-      - 'LICENSE'
-      - 'README*'
-      - 'CODE_OF_CONDUCT*'
-    branches: [master, 3.x, 2.x]
-  pull_request:
-    paths-ignore:
-      - '.github/**'
-      - '.gitignore'
-      - 'LICENSE'
-      - 'README*'
-      - 'CODE_OF_CONDUCT*'
-    branches: [master, 3.x, 2.x]
-
 defaults:
   run:
     shell: bash -ieo pipefail {0}
-
 jobs:
   build-verify:
-    name: Verify Build
-    runs-on: ubuntu-latest
     if: github.repository_owner == 'Apiman'
+    name: Verify Build
     outputs:
       apiman-version: ${{ steps.apiman-version-data.outputs.apiman-version }}
-      is-snapshot-version: ${{ steps.apiman-version-data.outputs.is-snapshot-version }}
+      is-snapshot-version: ${{ steps.apiman-version-data.outputs.is-snapshot-version
+        }}
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: true
+    - continue-on-error: true
+      name: Set up `mvn`
+      run: bash .github/workflows/support/set-mvn-location.sh
+    - continue-on-error: true
+      name: Set up JDK ${{ matrix.java }}
+      uses: actions/setup-java@v3
+      with:
+        cache: maven
+        distribution: temurin
+        java-version: ${{ matrix.java }}
+    - continue-on-error: true
+      id: apiman-version-data
+      name: Get Apiman version
+      run: "export APIMAN_VERSION=$(mvn help:evaluate -Dexpression=project.version\
+        \ -q -DforceStdout)\necho \"apiman-version=$APIMAN_VERSION\" >> $GITHUB_OUTPUT\n\
+        if [[ \"$APIMAN_VERSION\" =~ \"SNAPSHOT\" ]]\nthen\n  echo \"is-snapshot-version=true\"\
+        \ >> $GITHUB_OUTPUT\nelse\n  echo \"is-snapshot-version=false\" >> $GITHUB_OUTPUT\n\
+        fi\n"
+    - continue-on-error: true
+      id: yarn-cache-dir-path
+      name: Get yarn cache directory path
+      run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+    - continue-on-error: true
+      id: cache-yarn-cache
+      name: Cache yarn cache
+      uses: actions/cache@v3
+      with:
+        key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+        path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+        restore-keys: '${{ runner.os }}-yarn-
 
+          '
+    - continue-on-error: true
+      name: Build Project (including /parent)
+      run: ./fastbuild.sh
+    - continue-on-error: true
+      name: Run platform-specific integration tests (${{ matrix.integration-suite.name
+        }})
+      run: mvn test install -Dmaven.javadoc.skip=true ${{ matrix.integration-suite.command
+        }}
+    - continue-on-error: true
+      if: always()
+      name: Test Summary
+      uses: test-summary/action@v2
+      with:
+        paths: '**/target/surefire-reports/TEST-*.xml'
+    - continue-on-error: true
+      if: always()
+      name: Upload test summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-summary
+        path: test-summary.md
     strategy:
       matrix:
-        java: [ 11, 17 ]
         integration-suite:
-          # Default, empty string to avoid setting
-          - name: Default configuration (JPA)
-            command: " "
-          # Servlet elasticsearch
-          - name: Servlet with Elasticsearch gateway
-            command: -Dapiman.gateway-test.config=servlet-es
-          # Vert.x in-memory gateway
-          - name: Vert.x with in-memory registry
-            command: -Dapiman.gateway-test.config=vertx3-mem
-          # Vert.x elasticsearch
-          - name: Vert.x with Elasticsearch registry
-            command: -Dapiman.gateway-test.config=vertx3-es
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-        with:
-          submodules: true
-          fetch-depth: 0
-
-      - name: Set up `mvn`
-        run: bash .github/workflows/support/set-mvn-location.sh
-
-      - name: Set up JDK ${{ matrix.java }}
-        uses: actions/setup-java@v3
-        with:
-          distribution: temurin
-          java-version: ${{ matrix.java }}
-          cache: maven
-
-      - name: Get Apiman version
-        id: apiman-version-data
-        # Don't use mvn for `help:evaluate` command, output is messed up.
-        run: |
-          export APIMAN_VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
-          echo "apiman-version=$APIMAN_VERSION" >> $GITHUB_OUTPUT
-          if [[ "$APIMAN_VERSION" =~ "SNAPSHOT" ]]
-          then
-            echo "is-snapshot-version=true" >> $GITHUB_OUTPUT
-          else
-            echo "is-snapshot-version=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
-
-      - name: Cache yarn cache
-        uses: actions/cache@v3
-        id: cache-yarn-cache
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Build Project (including /parent)
-        run: ./fastbuild.sh
-
-      - name: Run platform-specific integration tests (${{ matrix.integration-suite.name }})
-
-        run: mvn test install -Dmaven.javadoc.skip=true ${{ matrix.integration-suite.command }}
-
-      - name: Test Summary
-        uses: test-summary/action@v2
-        with:
-          paths: '**/target/surefire-reports/TEST-*.xml'
-        if: always()
-
-      - name: Upload test summary
-        uses: actions/upload-artifact@v3
-        with:
-          name: test-summary
-          path: test-summary.md
-        if: always()
-
+        - command: ' '
+          name: Default configuration (JPA)
+        - command: -Dapiman.gateway-test.config=servlet-es
+          name: Servlet with Elasticsearch gateway
+        - command: -Dapiman.gateway-test.config=vertx3-mem
+          name: Vert.x with in-memory registry
+        - command: -Dapiman.gateway-test.config=vertx3-es
+          name: Vert.x with Elasticsearch registry
+        java:
+        - 11
+        - 17
   e2e:
     name: Cypress end-to-end testing
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-        with:
-          submodules: true
-          fetch-depth: 0
+    - continue-on-error: true
+      name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: true
+    - continue-on-error: true
+      name: Set up `mvn`
+      run: bash .github/workflows/support/set-mvn-location.sh
+    - continue-on-error: true
+      name: Set up JDK 11 (for deploying assets, docker builds, etc)
+      uses: actions/setup-java@v3
+      with:
+        cache: maven
+        distribution: temurin
+        java-version: '11'
+        server-id: ossrh
+        server-password: MAVEN_PASSWORD
+        server-username: MAVEN_USERNAME
+    - continue-on-error: true
+      env:
+        CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_DASHBOARD_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      name: Build latest docker image locally & run Cypress
+      run: 'cd manager/ui/war
 
-      - name: Set up `mvn`
-        run: bash .github/workflows/support/set-mvn-location.sh
+        yarn install --frozen-lockfile
 
-      - name: Set up JDK 11 (for deploying assets, docker builds, etc)
-        uses: actions/setup-java@v3
-        with:
-          java-version: '11'
-          distribution: 'temurin'
-          cache: 'maven'
-          server-id: 'ossrh'
-          server-username: MAVEN_USERNAME
-          server-password: MAVEN_PASSWORD
+        yarn apiman:rebuild
 
-      - name: Build latest docker image locally & run Cypress
-        run: |
-          cd manager/ui/war
-          yarn install --frozen-lockfile
-          yarn apiman:rebuild
-          yarn ci
-        env:
-          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_DASHBOARD_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        yarn ci
 
-  publish-snapshots:
-    name: Publish master snapshot artifacts
-    runs-on: ubuntu-latest
-    env:
-      APIMAN_VERSION: ${{ needs.build-verify.outputs.apiman-version }}
-      IS_SNAPSHOT_VERSION: ${{ needs.build-verify.outputs.is-snapshot-version }}
-
-    # Export if version contains "SNAPSHOT" only
-    if: needs.build-verify.outputs.is-snapshot-version == 'true' && github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-    needs: [ build-verify, e2e ]
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
-        with:
-          submodules: true
-          fetch-depth: 0
-
-      - name: Set up `mvn`
-        run: bash .github/workflows/support/set-mvn-location.sh
-
-      - name: Tag/retag snapshot
-        run: |
-          echo "Version: $APIMAN_VERSION"
-          echo "Is Snapshot: $IS_SNAPSHOT_VERSION"
-          git config --global user.name "$GITHUB_ACTOR"
-          git config --global user.email "${GITHUB_ACTOR}@users.noreply.github.com"
-          git tag -a -f -m "Snapshot tag: $APIMAN_VERSION" $APIMAN_VERSION 
-
-      - name: Cache local Maven repository
-        uses: actions/cache@v3
-        with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
-
-      - name: Set up JDK 11 (for deploying assets, docker builds, etc)
-        uses: actions/setup-java@v3
-        with:
-          java-version: '11'
-          distribution: 'temurin'
-          cache: 'maven'
-          server-id: 'ossrh'
-          server-username: MAVEN_USERNAME
-          server-password: MAVEN_PASSWORD
-
-      - name: 'Apiman Parent: Build and deploy POM/BOM & deploy to OSSRH Snapshots'
-        run: |
-          cd parent
-          mvn -B clean install
-          mvn -B deploy
-        env:
-          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-
-      - name: 'Apiman: Build and deploy main project to OSSRH Snapshots'
-        run: |
-          mvn -B deploy -DskipTests -Dmaven.test.skip=true
-        env:
-          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Collecting release assets
-        run: |
-          mkdir -p /tmp/releases
-          cp containers/docker-compose/target/apiman-docker-compose-$APIMAN_VERSION.zip /tmp/releases/
-          cp distro/wildfly/target/apiman-distro-wildfly-$APIMAN_VERSION-overlay.zip /tmp/releases/
-          cp distro/vertx/target/apiman-distro-vertx-$APIMAN_VERSION.zip /tmp/releases/
-          cp distro/tomcat/target/apiman-distro-tomcat-$APIMAN_VERSION-overlay.zip /tmp/releases/
-          cp api-catalog/catalog.json /tmp/releases/apiman-api-catalog.json
-          cp plugins/plugin-registry/target/classes/registry.json /tmp/releases/apiman-plugin-registry.json
-
-      - name: Create/update GitHub snapshot release ${{ env.APIMAN_VERSION }}
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ env.APIMAN_VERSION }}
-          name: ${{ env.APIMAN_VERSION }}
-          body: | 
-            Snapshot ${{ env.APIMAN_VERSION }}. **This is not a production-grade release!**
-            
-            Each time a snapshot of this version is built in CI, the artifacts in this release will be replaced.
-            The date you see on the release itself may therefore be misleading.
-            
-            You can refer to CHANGELOG.adoc in the attached release files if you want to see the changes when the
-            snapshot was created.
-
-          prerelease: true
-          files: |
-            CHANGELOG.adoc
-            /tmp/releases/* 
-
+        '
   publish-docker-images:
-    needs: [build-verify, publish-snapshots]
-    uses: apiman/apiman/.github/workflows/docker-test-release.yml@master
-    secrets: inherit
     if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    needs:
+    - build-verify
+    - publish-snapshots
+    secrets: inherit
+    uses: apiman/apiman/.github/workflows/docker-test-release.yml@master
     with:
       apiman-version: ${{ needs.build-verify.outputs.apiman-version }}
       push-to-repos: true
       snapshot: ${{ needs.build-verify.outputs.is-snapshot-version == 'true' }}
+  publish-snapshots:
+    env:
+      APIMAN_VERSION: ${{ needs.build-verify.outputs.apiman-version }}
+      IS_SNAPSHOT_VERSION: ${{ needs.build-verify.outputs.is-snapshot-version }}
+    if: needs.build-verify.outputs.is-snapshot-version == 'true' && github.ref ==
+      'refs/heads/master' && github.event_name != 'pull_request'
+    name: Publish master snapshot artifacts
+    needs:
+    - build-verify
+    - e2e
+    runs-on: self-hosted
+    steps:
+    - continue-on-error: true
+      name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        submodules: true
+    - continue-on-error: true
+      name: Set up `mvn`
+      run: bash .github/workflows/support/set-mvn-location.sh
+    - continue-on-error: true
+      name: Tag/retag snapshot
+      run: "echo \"Version: $APIMAN_VERSION\"\necho \"Is Snapshot: $IS_SNAPSHOT_VERSION\"\
+        \ngit config --global user.name \"$GITHUB_ACTOR\"\ngit config --global user.email\
+        \ \"${GITHUB_ACTOR}@users.noreply.github.com\"\ngit tag -a -f -m \"Snapshot\
+        \ tag: $APIMAN_VERSION\" $APIMAN_VERSION \n"
+    - continue-on-error: true
+      name: Cache local Maven repository
+      uses: actions/cache@v3
+      with:
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        path: ~/.m2/repository
+        restore-keys: '${{ runner.os }}-maven-
+
+          '
+    - continue-on-error: true
+      name: Set up JDK 11 (for deploying assets, docker builds, etc)
+      uses: actions/setup-java@v3
+      with:
+        cache: maven
+        distribution: temurin
+        java-version: '11'
+        server-id: ossrh
+        server-password: MAVEN_PASSWORD
+        server-username: MAVEN_USERNAME
+    - continue-on-error: true
+      env:
+        MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+        MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+      name: 'Apiman Parent: Build and deploy POM/BOM & deploy to OSSRH Snapshots'
+      run: 'cd parent
+
+        mvn -B clean install
+
+        mvn -B deploy
+
+        '
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+        MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+      name: 'Apiman: Build and deploy main project to OSSRH Snapshots'
+      run: 'mvn -B deploy -DskipTests -Dmaven.test.skip=true
+
+        '
+    - continue-on-error: true
+      name: Collecting release assets
+      run: 'mkdir -p /tmp/releases
+
+        cp containers/docker-compose/target/apiman-docker-compose-$APIMAN_VERSION.zip
+        /tmp/releases/
+
+        cp distro/wildfly/target/apiman-distro-wildfly-$APIMAN_VERSION-overlay.zip
+        /tmp/releases/
+
+        cp distro/vertx/target/apiman-distro-vertx-$APIMAN_VERSION.zip /tmp/releases/
+
+        cp distro/tomcat/target/apiman-distro-tomcat-$APIMAN_VERSION-overlay.zip /tmp/releases/
+
+        cp api-catalog/catalog.json /tmp/releases/apiman-api-catalog.json
+
+        cp plugins/plugin-registry/target/classes/registry.json /tmp/releases/apiman-plugin-registry.json
+
+        '
+    - continue-on-error: true
+      name: Create/update GitHub snapshot release ${{ env.APIMAN_VERSION }}
+      uses: softprops/action-gh-release@v1
+      with:
+        body: 'Snapshot ${{ env.APIMAN_VERSION }}. **This is not a production-grade
+          release!**
+
+
+          Each time a snapshot of this version is built in CI, the artifacts in this
+          release will be replaced.
+
+          The date you see on the release itself may therefore be misleading.
+
+
+          You can refer to CHANGELOG.adoc in the attached release files if you want
+          to see the changes when the
+
+          snapshot was created.
+
+          '
+        files: "CHANGELOG.adoc\n/tmp/releases/* \n"
+        name: ${{ env.APIMAN_VERSION }}
+        prerelease: true
+        tag_name: ${{ env.APIMAN_VERSION }}
+name: Verify Build Workflow
+on:
+  repository_dispatch:
+    types: trigger-ga___apiman-verify.yaml
